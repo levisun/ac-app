@@ -1,46 +1,143 @@
-class App {
+/**
+ * 基类
+ */
+class base {
+
     constructor(_api = null, _params = {}) {
         if (null === _api) {
             alert('启动错误,请传入api对象');
             return false;
         }
         this.appApi = _api;
-        this.showDebug = typeof(_params.debug) == 'undefined' ? false : _params.debug;
-        this.threshold = typeof(_params.threshold) == 'undefined' ? 10 : _params.threshold;
-        this.timeout = typeof(_params.timeout) == 'undefined' ? 300 : _params.timeout;
 
-        // if ('android' == this.appApi.systemType) {
+        // 显示调试信息
+        this.showDebug = 'undefined' == typeof (_params.debug) ? false : _params.debug;
+        // 滚动事件底部间距
+        this.threshold = 'undefined' == typeof (_params.threshold) ? 10 : _params.threshold;
+        // 超时
+        this.timeout = 'undefined' == typeof (_params.timeout) ? 300 : _params.timeout;
+        // 支持版本
+        this.version = 'undefined' == typeof (_params.version) ? { android: 8, ios: 11 } : _params.version;
 
-        // }
-        // else if ('ios' == this.appApi.systemType) {
+        this.api = {
+            appid: 'undefined' == typeof (_params.api.appid) ? '1000001' : _params.api.appid,
+            appsecret: 'undefined' == typeof (_params.api.appsecret) ? '' : _params.api.appsecret,
+            version: 'undefined' == typeof (_params.api.version) ? '1.2.1' : _params.api.version,
+            cache_open: true,
+            cache_expire: 1140,
+        };
 
-        // }
-
-        // this.appApi.closeWidget({
-        //     id: self.appApi.appId,
-        //     silent: true
-        // });
-
-        this.debug('启动');
+        // APP版本支持
+        let ver = this.appApi.systemVersion.split('.');
+        ver = parseInt(ver[0]);
+        if (ver < this.version[this.appApi.systemType]) {
+            this.toast(this.appApi.systemType + '版本过低,需要' + this.version[this.appApi.systemType] + '+,请升级后重新打开.', 3);
+            let self = this;
+            setTimeout(function () {
+                self.appApi.closeWidget({
+                    id: self.appApi.appId,
+                    silent: true
+                });
+            }, 3000);
+        }
 
         if ('none' == this.appApi.connectionType) {
         }
     };
 
+    /**
+     * 异步请求
+     * https://docs.apicloud.com/Client-API/api#3
+     * @param 参考ajax方法
+     * @param function _callback 回调方法
+     */
     pjax(_params, _callback) {
-        let self = this;
-        api.ajax(_params, function (ret, err) {
-            self.appApi.hideProgress();
-            self.appApi.refreshHeaderLoadDone();
-            _callback(ret, err);
-        });
+        let sign = this.sign(_params.data.values);
+
+        if ('undefined' !== typeof (_params.data.files)) {
+            _params.method = 'post';
+        }
+
+        // mehtod为get时不传值, _params.data.values无效
+        // 进行URL拼接达到传值效果
+        if ('get' === _params.method || 'GET' === _params.method) {
+            if (-1 === _params.url.indexOf('?')) {
+                _params.url += '?';
+            }
+            for (let index in _params.data.values) {
+                const element = _params.data.values[index];
+                _params.url += '&' + index + '=' + element;
+            }
+            _params.url += '&sign=' + sign;
+        } else {
+            _params.data.values.sign = sign;
+        }
+
+        this.debug(_params);
+
+        // 缓存标识符
+        let cache_key = this.md5(_params.data.values);
+        let result = this.cache(cache_key);
+        if (result && _params.method == 'get') {
+            framework.debug('[缓存请求]');
+            _callback(result);
+        } else {
+            this.debug('网络请求');
+            let self = this;
+            this.appApi.ajax(_params, function (result, error) {
+                // 隐藏进度提示框
+                self.appApi.hideProgress();
+                // 恢复下拉刷新提示框
+                self.appApi.refreshHeaderLoadDone();
+                if (error) {
+                    self.toast(error.statusCode + ':请求错误', 1.5);
+                    self.debug(error);
+                }
+                if ('undefined' != typeof (_params.rcache) && true === _params.rcache) {
+                    self.debug('[写入缓存]');
+                    self.cache(cache_key, result);
+                }
+                _callback(result);
+            });
+        }
     };
 
+    sign(_params) {
+        // 先用Object内置类的keys方法获取要排序对象的属性名，再利用Array原型上的sort方法对获取的属性名进行排序，newkey是一个数组
+        var newkey = Object.keys(_params).sort();
+
+        // 创建一个新的对象，用于存放排好序的键值对
+        var newObj = {};
+        for (var i = 0; i < newkey.length; i++) {
+            // 遍历newkey数组
+            newObj[newkey[i]] = _params[newkey[i]];
+            // 向新创建的对象中按照排好的顺序依次增加键值对
+        }
+
+        var sign = '';
+        for (var index in newObj) {
+            if (typeof (newObj[index]) != 'undefined' && index != 'content' && index != 'sign') {
+                sign += index + '=' + newObj[index] + '&';
+            }
+        }
+        sign = sign.substr(0, sign.length - 1);
+        sign += this.api.appsecret;
+        this.debug(sign);
+        sign = this.md5(sign);
+
+        return sign;
+    };
+
+    /**
+     * 加载更多
+     * @param string   _type top下拉刷新 scroll滚动底部加载
+     * @param function _callback 回调方法
+     */
     more(_type, _callback) {
         if ('top' == _type) {
             this.appApi.setRefreshHeaderInfo({
                 loadingImg: 'widget://image/refresh.png',
-                bgColor: '#ccc',
+                bgColor: '#fff',
                 textColor: '#fff',
                 textDown: '下拉刷新...',
                 textUp: '松开刷新...'
@@ -54,6 +151,9 @@ class App {
         }
     };
 
+    /**
+     * 清空缓存
+     */
     removeCache() {
         let self = this;
         this.appApi.getCacheSize(function (res) {
@@ -76,11 +176,15 @@ class App {
                 self.toast('缓存已清空');
             }
         });
-    }
+    };
 
+    /**
+     * 更新
+     * 云修复
+     * 版本更新
+     */
     update() {
         let self = this;
-
         this.event('smartupdatefinish', function () {
             self.appApi.rebootApp();
         });
@@ -89,7 +193,7 @@ class App {
         mam.checkUpdate(function (res, err) {
             self.appApi.confirm({
                 title: '有新的版本,是否下载并安装 ',
-                msg: '新版本型号:' + res.result.version + '发布时间:' + res.result.time,
+                msg: '新版本:' + res.result.version + '发布时间:' + res.result.time,
                 buttons: ['确定', '取消']
             }, function (r, err) {
                 if (r.buttonIndex == 1) {
@@ -116,6 +220,11 @@ class App {
         });
     };
 
+    /**
+     * 断网
+     * @param function _offline 断网回调方法
+     * @param function _online  恢复回调方法
+     */
     network(_offline, _online) {
         let self = this;
         this.event('online', function () {
@@ -145,6 +254,9 @@ class App {
         });
     };
 
+    /**
+     * 返回按键
+     */
     back() {
         let self = this;
         self.backCloseNum = 1;
@@ -179,6 +291,11 @@ class App {
         });
     };
 
+    /**
+     * 事件
+     * @param string   _type
+     * @param function _callback 回调方法
+     */
     event(_type, _callback) {
         this.appApi.addEventListener({
             name: _type,
@@ -191,8 +308,8 @@ class App {
         });
     };
 
-    selectGroup = function (_params) {
-        _params.reload = typeof (_params.reload) == 'undefined' ? false : _params.reload;
+    selectGroup(_params) {
+        _params.reload = 'undefined' == typeof (_params.reload) ? false : _params.reload;
         this.appApi.setFrameGroupIndex(_params);
     };
 
@@ -206,9 +323,9 @@ class App {
 
         _params.rect = {
             x: 0,
-            y: typeof (_params.top) == 'undefined' ? this.appApi.safeArea.top : _params.top,
+            y: 'undefined' == typeof (_params.top) ? this.appApi.safeArea.top : _params.top,
             w: this.appApi.winWidth,
-            h: typeof (_params.foot) == 'undefined' ? this.appApi.winHeight : this.appApi.winHeight - _params.foot,
+            h: 'undefined' == typeof (_params.foot) ? this.appApi.winHeight : this.appApi.winHeight - _params.foot,
             marginLeft: 0,
             marginTop: 0,
             marginBottom: 0,
@@ -235,12 +352,12 @@ class App {
         if ('undefined' != typeof (_params.url)) {
             _params.url = 'widget://html/' + _params.url;
         }
-        _params.reload = typeof (_params.reload) == 'undefined' ? true : _params.reload;
+        _params.reload = 'undefined' == typeof (_params.reload) ? true : _params.reload;
         _params.rect = {
             x: 0,
-            y: typeof (_params.top) == 'undefined' ? this.appApi.safeArea.top : _params.top,
+            y: 'undefined' == typeof (_params.top) ? this.appApi.safeArea.top : _params.top,
             w: this.appApi.winWidth,
-            h: typeof (_params.foot) == 'undefined' ? this.appApi.winHeight : this.appApi.winHeight - _params.foot,
+            h: 'undefined' == typeof (_params.foot) ? this.appApi.winHeight : this.appApi.winHeight - _params.foot,
             marginLeft: 0,
             marginTop: 0,
             marginBottom: 0,
@@ -287,20 +404,74 @@ class App {
 
         // 返回窗口历史记录
         return winHistory;
-    }
+    };
 
-    userCache(_name, _value = '', _expire = 0) {
+    cache(_name, _value = '', _expire = null) {
+        _expire = null === _expire ? this.api.cache_expire : _expire;
+
+        let self = this;
+        if (false === this.api.cache_open) {
+            this.appApi.clearCache(function () {
+                self.debug('清空缓存');
+            });
+            return false;
+        }
+
+        // 清空缓存
+        if (_name === null) {
+            this.appApi.clearCache(function () {
+                self.debug('清空缓存');
+            });
+
+            return true;
+        }
+        // 获得缓存数据
+        else if (_value === '') {
+            var _name = this.md5(_name);
+
+            var data = this.appApi.readFile({
+                sync: true,
+                path: 'cache://' + _name + '.json',
+            });
+            if (data) {
+                data = JSON.parse(data);
+                if (data.expire == 0 || data.expire >= this.timestamp()) {
+                    return data.value;
+                }
+            } else {
+                return false;
+            }
+        }
+        // 写入缓存
+        else {
+            _expire = 0 === _expire ? _expire : this.timestamp() + _expire;
+
+            var _name = this.md5(_name);
+            this.appApi.writeFile({
+                path: 'cache://' + _name + '.json',
+                data: JSON.stringify({
+                    expire: _expire,
+                    value: _value
+                })
+            }, function (ret, err) {
+
+            });
+            return _value;
+        }
+    };
+
+    userCache(_name, _value = '') {
         if ('undefined' == typeof (_name)) {
             return false;
         }
 
         // 删除缓存
-        if (_value === null) {
+        if (null === _value) {
             this.appApi.removePrefs({ key: _name });
             return true;
         }
         // 获得缓存数据
-        else if (_value === '') {
+        else if ('' === _value) {
             var data = this.appApi.getPrefs({ sync: true, key: _name });
             if (!!data) {
                 return JSON.parse(data);
@@ -321,13 +492,13 @@ class App {
     };
 
     md5(_data) {
-        let str = this.appApi.systemType + this.appApi.deviceId + this.appApi.deviceModel + this.appApi.deviceName;
-        if (typeof (_data) === 'object') {
-            for (var index in _params) {
-                str += index + this.md5(_params[index]);
+        let str = '';
+        if ('object' === typeof (_data)) {
+            for (var index in _data) {
+                str += index + this.md5(_data[index]);
             }
         }
-        else if (typeof (_data) !== 'function') {
+        else if ('function' !== typeof (_data)) {
             str += _data;
         }
 
@@ -355,7 +526,7 @@ class App {
             if ('console' == _type) {
                 console.log(JSON.stringify(_log));
             } else {
-                this.appApi.alert(JSON.stringify(_log));
+                this.appApi.alert(_log);
             }
         }
     };
